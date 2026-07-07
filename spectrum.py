@@ -73,9 +73,17 @@ def _draw_play(p, cx, cy, size, color):
 class SpectrumWidget(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowFlags(Qt.WindowStaysOnTopHint)
+        self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
         self.setWindowTitle("Apple Music Spectrum")
         self.resize(520, 320)
+
+        self._resize_edge  = None
+        self._resize_start = None
+        self._resize_geom  = None
+        RESIZE_MARGIN      = 7
+
+        self._btn_close    = QRect()
+        self._btn_minimize = QRect()
 
         self.levels      = np.zeros(NUM_BARS)
         self.global_peak = DB_FLOOR
@@ -141,6 +149,23 @@ class SpectrumWidget(QWidget):
         self._btn_hover = None
         self.setMouseTracking(True)
 
+    def _get_edge(self, pos):
+        x, y, w, h = pos.x(), pos.y(), self.width(), self.height()
+        m = 6
+        left   = x < m
+        right  = x > w - m
+        top    = y < m
+        bottom = y > h - m
+        if top    and left:  return 'tl'
+        if top    and right: return 'tr'
+        if bottom and left:  return 'bl'
+        if bottom and right: return 'br'
+        if left:             return 'l'
+        if right:            return 'r'
+        if top:              return 't'
+        if bottom:           return 'b'
+        return None
+
     def _send_command(self, coro_fn):
         async def _run():
             with self._session_lock:
@@ -169,17 +194,62 @@ class SpectrumWidget(QWidget):
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             pos = event.pos()
-            if self._btn_prev.contains(pos):
+            if self._btn_close.contains(pos):
+                self.close()
+                return
+            elif self._btn_minimize.contains(pos):
+                self.showMinimized()
+                return
+            elif self._btn_prev.contains(pos):
                 self.cmd_prev()
+                return
             elif self._btn_play.contains(pos):
                 self.cmd_play_pause()
+                return
             elif self._btn_next.contains(pos):
                 self.cmd_next()
+                return
+
+            edge = self._get_edge(pos)
+            if edge:
+                self._resize_edge  = edge
+                self._resize_start = event.globalPos()
+                self._resize_geom  = self.geometry()
+            else:
+                self._drag_pos = event.globalPos() - self.frameGeometry().topLeft()
 
     def mouseMoveEvent(self, event):
-        pos  = event.pos()
+        pos = event.pos()
+
+        if event.buttons() == Qt.LeftButton and self._resize_edge:
+            delta = event.globalPos() - self._resize_start
+            g     = self._resize_geom
+            x, y, w, h = g.x(), g.y(), g.width(), g.height()
+            min_w, min_h = 300, 200
+            e = self._resize_edge
+            if 'r' in e: w = max(min_w, g.width()  + delta.x())
+            if 'b' in e: h = max(min_h, g.height() + delta.y())
+            if 'l' in e:
+                new_w = max(min_w, g.width() - delta.x())
+                x = g.x() + g.width() - new_w
+                w = new_w
+            if 't' in e:
+                new_h = max(min_h, g.height() - delta.y())
+                y = g.y() + g.height() - new_h
+                h = new_h
+            self.setGeometry(x, y, w, h)
+            return
+
+        if event.buttons() == Qt.LeftButton and hasattr(self, '_drag_pos'):
+            self.move(event.globalPos() - self._drag_pos)
+            return
+
         prev = self._btn_hover
-        if self._btn_prev.contains(pos):
+        if self._btn_close.contains(pos):
+            self._btn_hover = "close"
+        elif self._btn_minimize.contains(pos):
+            self._btn_hover = "minimize"
+        elif self._btn_prev.contains(pos):
             self._btn_hover = "prev"
         elif self._btn_play.contains(pos):
             self._btn_hover = "play"
@@ -189,6 +259,23 @@ class SpectrumWidget(QWidget):
             self._btn_hover = None
         if self._btn_hover != prev:
             self.update()
+
+        # 鼠标形状跟随边缘
+        edge = self._get_edge(pos)
+        cursors = {
+            'tl': Qt.SizeFDiagCursor, 'br': Qt.SizeFDiagCursor,
+            'tr': Qt.SizeBDiagCursor, 'bl': Qt.SizeBDiagCursor,
+            'l':  Qt.SizeHorCursor,   'r':  Qt.SizeHorCursor,
+            't':  Qt.SizeVerCursor,   'b':  Qt.SizeVerCursor,
+        }
+        self.setCursor(cursors.get(edge, Qt.ArrowCursor))
+
+    def mouseReleaseEvent(self, event):
+        self._resize_edge  = None
+        self._resize_start = None
+        self._resize_geom  = None
+        if hasattr(self, '_drag_pos'):
+            del self._drag_pos
 
     def leaveEvent(self, event):
         self._btn_hover = None
@@ -324,6 +411,11 @@ class SpectrumWidget(QWidget):
     def _smooth_and_repaint(self):
         with self._result_lock:
             normalized = self.normalized.copy()
+            title = self.now_title
+
+        if title:
+            self.setWindowTitle(title)
+
         for i in range(NUM_BARS):
             alpha = 0.75 if normalized[i] > self.levels[i] else 0.08
             self.levels[i] += (normalized[i] - self.levels[i]) * alpha
@@ -467,6 +559,20 @@ class SpectrumWidget(QWidget):
                 p.setPen(Qt.NoPen)
                 p.drawRoundedRect(btn, 6, 6)
             draw_fn(btn.x() + btn.width() // 2, btn.y() + btn.height() // 2)
+
+        BTN_SZ = 12
+        btn_y  = footer_y + (FOOTER_H - BTN_SZ) // 2
+        self._btn_close    = QRect(W - BTN_SZ - 10,     btn_y, BTN_SZ, BTN_SZ)
+        self._btn_minimize = QRect(W - BTN_SZ * 2 - 18, btn_y, BTN_SZ, BTN_SZ)
+
+        for rect, hover_key, base_color in [
+            (self._btn_close,    "close",    QColor(255, 80,  80)),
+            (self._btn_minimize, "minimize", QColor(255, 180, 0)),
+        ]:
+            color = base_color if self._btn_hover == hover_key else QColor(80, 80, 100)
+            p.setBrush(color)
+            p.setPen(Qt.NoPen)
+            p.drawEllipse(rect)
 
         p.end()
 
