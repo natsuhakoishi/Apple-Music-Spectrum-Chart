@@ -77,6 +77,8 @@ class SpectrumWidget(QWidget):
         self.setWindowTitle("Apple Music Spectrum")
         self.resize(520, 320)
 
+        self._btn_apple = QRect()
+
         self._resize_edge  = None
         self._resize_start = None
         self._resize_geom  = None
@@ -194,7 +196,11 @@ class SpectrumWidget(QWidget):
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             pos = event.pos()
-            if self._btn_close.contains(pos):
+            if self._btn_apple.contains(pos):
+                import subprocess
+                subprocess.Popen(['explorer.exe', 'itms://'])
+                return
+            elif self._btn_close.contains(pos):
                 self.close()
                 return
             elif self._btn_minimize.contains(pos):
@@ -245,7 +251,9 @@ class SpectrumWidget(QWidget):
             return
 
         prev = self._btn_hover
-        if self._btn_close.contains(pos):
+        if self._btn_apple.contains(pos):
+            self._btn_hover = "apple"
+        elif self._btn_close.contains(pos):
             self._btn_hover = "close"
         elif self._btn_minimize.contains(pos):
             self._btn_hover = "minimize"
@@ -260,7 +268,6 @@ class SpectrumWidget(QWidget):
         if self._btn_hover != prev:
             self.update()
 
-        # 鼠标形状跟随边缘
         edge = self._get_edge(pos)
         cursors = {
             'tl': Qt.SizeFDiagCursor, 'br': Qt.SizeFDiagCursor,
@@ -573,6 +580,18 @@ class SpectrumWidget(QWidget):
             p.setBrush(color)
             p.setPen(Qt.NoPen)
             p.drawEllipse(rect)
+
+        APPLE_SZ = 24
+        apple_x  = 8
+        apple_y  = footer_y + (FOOTER_H - APPLE_SZ) // 2
+        self._btn_apple = QRect(apple_x, apple_y, APPLE_SZ + 4, APPLE_SZ)
+
+        apple_color = QColor(255, 255, 255, 255) if self._btn_hover == "apple" \
+                      else QColor(255, 255, 255, 120)
+        p.setPen(apple_color)
+        font_apple = QFont()
+        font_apple.setPointSize(20)
+        p.drawText(self._btn_apple, Qt.AlignCenter, "♫")
 
         p.end()
 
