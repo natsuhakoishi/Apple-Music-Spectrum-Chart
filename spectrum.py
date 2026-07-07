@@ -4,8 +4,7 @@ import threading
 import numpy as np
 import pyaudiowpatch as pyaudio
 from PyQt5.QtWidgets import QApplication, QWidget
-from PyQt5.QtGui import (QPainter, QColor, QPen, QLinearGradient,
-                          QFont, QPixmap, QPolygon)
+from PyQt5.QtGui import (QPainter, QColor, QPen, QLinearGradient, QFont, QPixmap, QPolygon)
 from PyQt5.QtCore import QTimer, Qt, QRect, QPoint
 
 CAPTURE_CHUNK = 512
@@ -23,19 +22,15 @@ THUMB_SIZE = 100
 
 
 def _draw_prev(p, cx, cy, size, color):
-    """Draw |◀◀ shape"""
     p.setPen(Qt.NoPen)
     p.setBrush(color)
-    # left bar
     p.drawRect(int(cx - size), int(cy - size//2), max(2, size//4), size)
-    # left triangle
     tri = QPolygon([
         QPoint(int(cx - size + size//4), cy),
         QPoint(int(cx),                  int(cy - size//2)),
         QPoint(int(cx),                  int(cy + size//2)),
     ])
     p.drawPolygon(tri)
-    # right triangle
     tri2 = QPolygon([
         QPoint(int(cx),          cy),
         QPoint(int(cx + size),   int(cy - size//2)),
@@ -45,29 +40,24 @@ def _draw_prev(p, cx, cy, size, color):
 
 
 def _draw_next(p, cx, cy, size, color):
-    """Draw ▶▶| shape"""
     p.setPen(Qt.NoPen)
     p.setBrush(color)
-    # left triangle
     tri = QPolygon([
         QPoint(int(cx - size), int(cy - size//2)),
         QPoint(int(cx - size), int(cy + size//2)),
         QPoint(int(cx),        cy),
     ])
     p.drawPolygon(tri)
-    # right triangle
     tri2 = QPolygon([
         QPoint(int(cx),        int(cy - size//2)),
         QPoint(int(cx),        int(cy + size//2)),
         QPoint(int(cx + size), cy),
     ])
     p.drawPolygon(tri2)
-    # right bar
     p.drawRect(int(cx + size), int(cy - size//2), max(2, size//4), size)
 
 
 def _draw_pause(p, cx, cy, size, color):
-    """Draw ⏸ two bars"""
     p.setPen(Qt.NoPen)
     p.setBrush(color)
     bar_w = max(3, size // 3)
@@ -77,7 +67,6 @@ def _draw_pause(p, cx, cy, size, color):
 
 
 def _draw_play(p, cx, cy, size, color):
-    """Draw ▶ triangle"""
     p.setPen(Qt.NoPen)
     p.setBrush(color)
     tri = QPolygon([
@@ -156,7 +145,6 @@ class SpectrumWidget(QWidget):
         self._btn_hover = None
         self.setMouseTracking(True)
 
-    # ── Control helpers ───────────────────────────────────────────────────────
     def _send_command(self, coro_fn):
         async def _run():
             with self._session_lock:
@@ -182,7 +170,6 @@ class SpectrumWidget(QWidget):
     def cmd_next(self):
         self._send_command(lambda s: s.try_skip_next_async())
 
-    # ── Mouse events ──────────────────────────────────────────────────────────
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             pos = event.pos()
@@ -211,7 +198,6 @@ class SpectrumWidget(QWidget):
         self._btn_hover = None
         self.update()
 
-    # ── Now-playing via Windows SMTC ─────────────────────────────────────────
     def _media_worker(self):
         async def _poll():
             try:
@@ -272,7 +258,6 @@ class SpectrumWidget(QWidget):
 
         asyncio.run(_poll())
 
-    # ── Audio callback ────────────────────────────────────────────────────────
     def audio_callback(self, in_data, frame_count, time_info, status):
         arr = np.frombuffer(in_data, dtype=np.float32).copy()
         if self.channels > 1:
@@ -288,7 +273,6 @@ class SpectrumWidget(QWidget):
         self._new_data.set()
         return (None, pyaudio.paContinue)
 
-    # ── FFT worker ────────────────────────────────────────────────────────────
     def _fft_worker(self):
         log_min = np.log10(20.0)
         log_max = np.log10(min(self.rate / 2.0, 24000.0))
@@ -329,7 +313,6 @@ class SpectrumWidget(QWidget):
             with self._result_lock:
                 self.normalized = norm
 
-    # ── Smooth + repaint ──────────────────────────────────────────────────────
     def _smooth_and_repaint(self):
         with self._result_lock:
             normalized = self.normalized.copy()
@@ -346,7 +329,6 @@ class SpectrumWidget(QWidget):
                     self.peak_levels[i] = max(0.0, self.peak_levels[i] - PEAK_DROP_SPEED)
         self.update()
 
-    # ── Paint ─────────────────────────────────────────────────────────────────
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
@@ -359,7 +341,6 @@ class SpectrumWidget(QWidget):
         BTN_W    = 48
         BTN_H    = FOOTER_H
 
-        # ── Header ────────────────────────────────────────────────────────────
         p.fillRect(0, 0, W, HEADER_H, QColor(15, 18, 30))
 
         with self._result_lock:
@@ -385,7 +366,6 @@ class SpectrumWidget(QWidget):
         p.setPen(QPen(QColor(255, 255, 255, 25), 1))
         p.drawLine(0, HEADER_H, W, HEADER_H)
 
-        # ── Spectrum ──────────────────────────────────────────────────────────
         pad_l, pad_r = 30, 30
         pad_top      = HEADER_H + 16
         pad_bot      = FOOTER_H + 10
@@ -419,7 +399,6 @@ class SpectrumWidget(QWidget):
                 p.setPen(QPen(QColor(255, 255, 255, 120), 0.5))
                 p.drawRoundedRect(int(x), py, bw, PLATE_H, 1, 1)
 
-        # ── Album art ─────────────────────────────────────────────────────────
         if thumb:
             margin = 8
             tx = W - thumb.width() - margin
@@ -429,7 +408,6 @@ class SpectrumWidget(QWidget):
             p.setOpacity(1.0)
             p.drawPixmap(tx, ty, thumb)
 
-        # ── Footer controls ───────────────────────────────────────────────────
         footer_y = H - FOOTER_H
         p.fillRect(0, footer_y, W, FOOTER_H, QColor(15, 18, 30))
         p.setPen(QPen(QColor(255, 255, 255, 25), 1))
@@ -465,7 +443,6 @@ class SpectrumWidget(QWidget):
 
         p.end()
 
-    # ── Cleanup ───────────────────────────────────────────────────────────────
     def closeEvent(self, event):
         self._running = False
         self._new_data.set()
