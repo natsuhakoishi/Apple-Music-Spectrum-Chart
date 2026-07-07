@@ -7,53 +7,47 @@ from PyQt5.QtWidgets import QApplication, QWidget
 from PyQt5.QtGui import (QPainter, QColor, QPen, QLinearGradient, QFont, QPixmap, QPolygon)
 from PyQt5.QtCore import QTimer, Qt, QRect, QPoint
 
-CAPTURE_CHUNK = 512
-FFT_SIZE      = 16384
-NUM_BARS      = 64
-
-DB_FLOOR = -70.0
-DB_CEIL  =  -5.0
-
+CAPTURE_CHUNK    = 512
+FFT_SIZE         = 16384
+NUM_BARS         = 64
+DB_FLOOR         = -70.0
+DB_CEIL          = -5.0
 PEAK_HOLD_FRAMES = 30
 PEAK_DROP_SPEED  = 0.015
 PLATE_H          = 3
-
-THUMB_SIZE = 100
+PROGRESS_H       = 4
+PROGRESS_PAD     = 30
 
 
 def _draw_prev(p, cx, cy, size, color):
     p.setPen(Qt.NoPen)
     p.setBrush(color)
     p.drawRect(int(cx - size), int(cy - size//2), max(2, size//4), size)
-    tri = QPolygon([
+    p.drawPolygon(QPolygon([
         QPoint(int(cx - size + size//4), cy),
-        QPoint(int(cx),                  int(cy - size//2)),
-        QPoint(int(cx),                  int(cy + size//2)),
-    ])
-    p.drawPolygon(tri)
-    tri2 = QPolygon([
-        QPoint(int(cx),          cy),
-        QPoint(int(cx + size),   int(cy - size//2)),
-        QPoint(int(cx + size),   int(cy + size//2)),
-    ])
-    p.drawPolygon(tri2)
+        QPoint(int(cx), int(cy - size//2)),
+        QPoint(int(cx), int(cy + size//2)),
+    ]))
+    p.drawPolygon(QPolygon([
+        QPoint(int(cx), cy),
+        QPoint(int(cx + size), int(cy - size//2)),
+        QPoint(int(cx + size), int(cy + size//2)),
+    ]))
 
 
 def _draw_next(p, cx, cy, size, color):
     p.setPen(Qt.NoPen)
     p.setBrush(color)
-    tri = QPolygon([
+    p.drawPolygon(QPolygon([
         QPoint(int(cx - size), int(cy - size//2)),
         QPoint(int(cx - size), int(cy + size//2)),
-        QPoint(int(cx),        cy),
-    ])
-    p.drawPolygon(tri)
-    tri2 = QPolygon([
-        QPoint(int(cx),        int(cy - size//2)),
-        QPoint(int(cx),        int(cy + size//2)),
+        QPoint(int(cx), cy),
+    ]))
+    p.drawPolygon(QPolygon([
+        QPoint(int(cx), int(cy - size//2)),
+        QPoint(int(cx), int(cy + size//2)),
         QPoint(int(cx + size), cy),
-    ])
-    p.drawPolygon(tri2)
+    ]))
     p.drawRect(int(cx + size), int(cy - size//2), max(2, size//4), size)
 
 
@@ -69,12 +63,11 @@ def _draw_pause(p, cx, cy, size, color):
 def _draw_play(p, cx, cy, size, color):
     p.setPen(Qt.NoPen)
     p.setBrush(color)
-    tri = QPolygon([
+    p.drawPolygon(QPolygon([
         QPoint(int(cx - size//2), int(cy - size//2)),
         QPoint(int(cx - size//2), int(cy + size//2)),
         QPoint(int(cx + size//2), cy),
-    ])
-    p.drawPolygon(tri)
+    ]))
 
 
 class SpectrumWidget(QWidget):
@@ -99,6 +92,9 @@ class SpectrumWidget(QWidget):
         self.now_artist    = ""
         self.now_thumbnail = None
         self.is_playing    = True
+
+        self.progress_pos      = 0.0
+        self.progress_duration = 0.0
 
         self._current_session = None
         self._session_lock    = threading.Lock()
@@ -126,7 +122,7 @@ class SpectrumWidget(QWidget):
             input=True,
             input_device_index=default_speakers["index"],
             frames_per_buffer=CAPTURE_CHUNK,
-            stream_callback=self.audio_callback
+            stream_callback=self.audio_callback,
         )
         self.stream.start_stream()
 
@@ -159,6 +155,9 @@ class SpectrumWidget(QWidget):
     def cmd_prev(self):
         self._send_command(lambda s: s.try_skip_previous_async())
 
+    def cmd_next(self):
+        self._send_command(lambda s: s.try_skip_next_async())
+
     def cmd_play_pause(self):
         if self.is_playing:
             self._send_command(lambda s: s.try_pause_async())
@@ -166,9 +165,6 @@ class SpectrumWidget(QWidget):
             self._send_command(lambda s: s.try_play_async())
         self.is_playing = not self.is_playing
         self.update()
-
-    def cmd_next(self):
-        self._send_command(lambda s: s.try_skip_next_async())
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -181,7 +177,7 @@ class SpectrumWidget(QWidget):
                 self.cmd_next()
 
     def mouseMoveEvent(self, event):
-        pos = event.pos()
+        pos  = event.pos()
         prev = self._btn_hover
         if self._btn_prev.contains(pos):
             self._btn_hover = "prev"
@@ -207,6 +203,7 @@ class SpectrumWidget(QWidget):
 
                 while self._running:
                     title, artist, thumb, found_session = "", "", None, None
+                    pos, duration = 0.0, 0.0
                     try:
                         mgr      = await Manager.request_async()
                         sessions = mgr.get_sessions()
@@ -219,6 +216,18 @@ class SpectrumWidget(QWidget):
                                     raw_artist    = info.artist or ""
                                     artist        = raw_artist.split(" — ")[0].strip()
                                     found_session = session
+
+                                    try:
+                                        tl       = session.get_timeline_properties()
+                                        start    = tl.start_time.total_seconds()
+                                        end      = tl.end_time.total_seconds()
+                                        cur      = tl.position.total_seconds()
+                                        duration = end - start
+                                        pos = max(0.0, min(1.0, (cur - start) / duration)) \
+                                              if duration > 0 else 0.0
+                                    except Exception:
+                                        pos, duration = 0.0, 0.0
+
                                     try:
                                         thumb_ref = info.thumbnail
                                         if thumb_ref:
@@ -231,13 +240,10 @@ class SpectrumWidget(QWidget):
                                             pm = QPixmap()
                                             pm.loadFromData(bytes(buf))
                                             if not pm.isNull():
-                                                thumb = pm.scaled(
-                                                    THUMB_SIZE, THUMB_SIZE,
-                                                    Qt.KeepAspectRatio,
-                                                    Qt.SmoothTransformation
-                                                )
+                                                thumb = pm
                                     except Exception:
                                         thumb = None
+
                                     if "apple" in app_id.lower():
                                         break
                             except Exception:
@@ -248,11 +254,13 @@ class SpectrumWidget(QWidget):
                     with self._session_lock:
                         self._current_session = found_session
                     with self._result_lock:
-                        self.now_title     = title
-                        self.now_artist    = artist
-                        self.now_thumbnail = thumb
+                        self.now_title         = title
+                        self.now_artist        = artist
+                        self.now_thumbnail     = thumb
+                        self.progress_pos      = pos
+                        self.progress_duration = duration
 
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(1)
             except ImportError:
                 pass
 
@@ -298,10 +306,10 @@ class SpectrumWidget(QWidget):
                     top_n  = min(3, len(band_vals))
                     raw[i] = float(np.mean(np.partition(band_vals, -top_n)[-top_n:]))
                 else:
-                    idx    = int(np.clip(np.searchsorted(freqs, centers[i]), 1, len(freqs)-1))
-                    f0, f1 = freqs[idx-1], freqs[idx]
-                    t      = (centers[i]-f0)/(f1-f0) if f1 > f0 else 0.0
-                    raw[i] = fft_db[idx-1] + t*(fft_db[idx]-fft_db[idx-1])
+                    idx    = int(np.clip(np.searchsorted(freqs, centers[i]), 1, len(freqs) - 1))
+                    f0, f1 = freqs[idx - 1], freqs[idx]
+                    t      = (centers[i] - f0) / (f1 - f0) if f1 > f0 else 0.0
+                    raw[i] = fft_db[idx - 1] + t * (fft_db[idx] - fft_db[idx - 1])
 
             frame_peak       = float(np.max(raw))
             self.global_peak = max(frame_peak, self.global_peak * 0.994)
@@ -336,20 +344,19 @@ class SpectrumWidget(QWidget):
 
         W, H = self.width(), self.height()
 
-        HEADER_H = 32
-        FOOTER_H = 36
-        BTN_W    = 48
-        BTN_H    = FOOTER_H
+        HEADER_H    = 32
+        FOOTER_H    = 36
+        BTN_W       = 48
+        BTN_H       = FOOTER_H
+        PROG_AREA_H = PROGRESS_H + 25
 
         p.fillRect(0, 0, W, HEADER_H, QColor(15, 18, 30))
 
         with self._result_lock:
-            title  = self.now_title
-            artist = self.now_artist
-            thumb  = self.now_thumbnail
-
-        left_text  = title  if title else "Nothing playing"
-        right_text = artist if title else ""
+            title    = self.now_title
+            artist   = self.now_artist
+            thumb    = self.now_thumbnail
+            prog_pos = self.progress_pos
 
         font_title = QFont()
         font_title.setPointSize(9)
@@ -357,6 +364,8 @@ class SpectrumWidget(QWidget):
         p.setFont(font_title)
         p.setPen(QColor(240, 240, 255, 220))
 
+        left_text  = title  if title else "Nothing playing"
+        right_text = artist if title else ""
         left_w = int(W * 0.55)
         p.setClipRect(10, 0, left_w - 10, HEADER_H)
         p.drawText(10, 0, left_w - 10, HEADER_H, Qt.AlignVCenter | Qt.AlignLeft, left_text)
@@ -368,7 +377,7 @@ class SpectrumWidget(QWidget):
 
         pad_l, pad_r = 30, 30
         pad_top      = HEADER_H + 16
-        pad_bot      = FOOTER_H + 10
+        pad_bot      = FOOTER_H + PROG_AREA_H + 10
         chart_w = W - pad_l - pad_r
         chart_h = H - pad_top - pad_bot
 
@@ -400,46 +409,64 @@ class SpectrumWidget(QWidget):
                 p.drawRoundedRect(int(x), py, bw, PLATE_H, 1, 1)
 
         if thumb:
+            chart_area_h = H - HEADER_H - FOOTER_H
+            thumb_size   = int(min(chart_area_h * 0.6, W * 0.25, 200))
+            scaled_thumb = thumb.scaled(
+                thumb_size, thumb_size,
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation,
+            )
             margin = 8
-            tx = W - thumb.width() - margin
+            tx = W - scaled_thumb.width() - margin
             ty = HEADER_H + margin
             p.setOpacity(0.35)
-            p.fillRect(tx - 2, ty - 2, thumb.width() + 4, thumb.height() + 4, QColor(0, 0, 0))
+            p.fillRect(tx - 2, ty - 2, scaled_thumb.width() + 4, scaled_thumb.height() + 4, QColor(0, 0, 0))
             p.setOpacity(1.0)
-            p.drawPixmap(tx, ty, thumb)
+            p.drawPixmap(tx, ty, scaled_thumb)
 
-        footer_y = H - FOOTER_H
+        footer_y   = H - FOOTER_H
+        prog_y     = footer_y - PROG_AREA_H + (PROG_AREA_H - PROGRESS_H) // 2
+        bar_x      = PROGRESS_PAD
+        bar_w_full = W - PROGRESS_PAD * 2
+
+        p.setBrush(QColor(255, 255, 255, 30))
+        p.setPen(Qt.NoPen)
+        p.drawRoundedRect(bar_x, prog_y, bar_w_full, PROGRESS_H, PROGRESS_H // 2, PROGRESS_H // 2)
+
+        filled_w = int(bar_w_full * prog_pos)
+        if filled_w > 0:
+            grad_prog = QLinearGradient(bar_x, 0, bar_x + bar_w_full, 0)
+            grad_prog.setColorAt(0.0, QColor(180, 180, 255, 220))
+            grad_prog.setColorAt(1.0, QColor(255, 255, 255, 200))
+            p.setBrush(grad_prog)
+            p.drawRoundedRect(bar_x, prog_y, filled_w, PROGRESS_H,
+                              PROGRESS_H // 2, PROGRESS_H // 2)
+
         p.fillRect(0, footer_y, W, FOOTER_H, QColor(15, 18, 30))
         p.setPen(QPen(QColor(255, 255, 255, 25), 1))
         p.drawLine(0, footer_y, W, footer_y)
 
         cx = W // 2
-        cy = footer_y + FOOTER_H // 2
-
-        self._btn_play = QRect(cx - BTN_W // 2,             footer_y, BTN_W, BTN_H)
-        self._btn_prev = QRect(cx - BTN_W // 2 - BTN_W - 8, footer_y, BTN_W, BTN_H)
-        self._btn_next = QRect(cx + BTN_W // 2 + 8,         footer_y, BTN_W, BTN_H)
+        self._btn_play = QRect(cx - BTN_W // 2,              footer_y, BTN_W, BTN_H)
+        self._btn_prev = QRect(cx - BTN_W // 2 - BTN_W - 8,  footer_y, BTN_W, BTN_H)
+        self._btn_next = QRect(cx + BTN_W // 2 + 8,          footer_y, BTN_W, BTN_H)
 
         icon_size = 10
-
         for btn, draw_fn, key in [
             (self._btn_prev, lambda px, py: _draw_prev(p, px, py, icon_size, color), "prev"),
-            (self._btn_play, lambda px, py: (_draw_pause(p, px, py, icon_size, color)
-                                              if self.is_playing else
-                                              _draw_play(p, px, py, icon_size, color)), "play"),
+            (self._btn_play, lambda px, py: (
+                _draw_pause(p, px, py, icon_size, color) if self.is_playing
+                else _draw_play(p, px, py, icon_size, color)
+            ), "play"),
             (self._btn_next, lambda px, py: _draw_next(p, px, py, icon_size, color), "next"),
         ]:
             color = QColor(255, 255, 255, 255) if self._btn_hover == key \
                     else QColor(255, 255, 255, 160)
-
             if self._btn_hover == key:
                 p.setBrush(QColor(255, 255, 255, 25))
                 p.setPen(Qt.NoPen)
                 p.drawRoundedRect(btn, 6, 6)
-
-            bcx = btn.x() + btn.width() // 2
-            bcy = btn.y() + btn.height() // 2
-            draw_fn(bcx, bcy)
+            draw_fn(btn.x() + btn.width() // 2, btn.y() + btn.height() // 2)
 
         p.end()
 
