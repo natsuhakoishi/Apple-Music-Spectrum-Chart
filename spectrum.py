@@ -1,10 +1,12 @@
+import os
 import sys
+import ctypes
 import asyncio
 import threading
 import numpy as np
 import pyaudiowpatch as pyaudio
 from PyQt5.QtWidgets import QApplication, QWidget
-from PyQt5.QtGui import (QPainter, QColor, QPen, QLinearGradient, QFont, QPixmap, QPolygon)
+from PyQt5.QtGui import (QPainter, QColor, QPen, QLinearGradient, QFont, QPixmap, QPolygon, QIcon)
 from PyQt5.QtCore import QTimer, Qt, QRect, QPoint
 
 CAPTURE_CHUNK    = 512
@@ -18,6 +20,10 @@ PLATE_H          = 3
 PROGRESS_H       = 4
 PROGRESS_PAD     = 30
 
+def resource_path(filename):
+    if getattr(sys, '_MEIPASS', None):
+        return os.path.join(sys._MEIPASS, filename)
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
 
 def _draw_prev(p, cx, cy, size, color):
     p.setPen(Qt.NoPen)
@@ -76,6 +82,7 @@ class SpectrumWidget(QWidget):
         self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
         self.setWindowTitle("Apple Music Spectrum")
         self.resize(520, 320)
+        self.setWindowIcon(QIcon(resource_path('sunna.ico')))
 
         self._btn_apple = QRect()
 
@@ -607,6 +614,11 @@ class SpectrumWidget(QWidget):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("com.natsuhakoishi.AMS")
+
+    app.setWindowIcon(QIcon(resource_path('sunna.ico')))
+
     w = SpectrumWidget()
     w.show()
     sys.exit(app.exec_())
